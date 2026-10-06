@@ -1,10 +1,4 @@
-"""
-Юнит-тесты для учебного модуля доставки.
-
-Тесты написаны по восстановленным бизнес-требованиям (не по «фактическим»
-ошибкам реализации). Из-за дефектов в delivery_service.py часть тестов
-ожидаемо падает — это материал для пунктов Б и В отчёта.
-"""
+"""Юнит-тесты модуля расчета доставки."""
 
 from __future__ import annotations
 
@@ -18,12 +12,20 @@ if str(ROOT) not in sys.path:
 
 from src.delivery_service import calculate_delivery_cost
 
-# Восстановленная бизнес-логика для ожидаемых значений в тестах:
-# - база: 200 + distance * 5
-# - вес (5; 20): *1.2; вес >= 20: *1.5
-# - хрупкий +300; опасный +1000
-# - экспресс: стоимость * 1.5 (дороже обычной), срок max(1, days // 2)
-# - дата отправки фиксирована: 2026-09-03
+
+def expected_cost(weight: float, distance: int, package_type: str, is_express: bool = False) -> int:
+    total = 200 + distance * 5
+    if weight > 5.0 and weight < 20.0:
+        total *= 1.2
+    elif weight >= 20.0:
+        total *= 1.5
+    if package_type == "хрупкий":
+        total += 300
+    elif package_type == "опасный":
+        total += 1000
+    if is_express:
+        total *= 1.5
+    return int(total)
 
 
 def expected_cost(weight: float, distance: int, package_type: str, is_express: bool = False) -> int:
@@ -120,20 +122,16 @@ class TestDeliveryPricing(unittest.TestCase):
 
 
 class TestDeliveryExpressAndDate(unittest.TestCase):
-    """Экспресс-доставка и расчёт даты (здесь ожидаются дефекты реализации)."""
+    """Экспресс-доставка и расчёт даты."""
 
     def test_express_delivery_increases_total_cost(self):
-        """
-        Бизнес-ожидание: экспресс дороже обычной доставки (коэффициент 1.5).
-        В коде стоит total_cost *= 0.5 — стоимость уменьшается (дефект).
-        """
         ordinary, _ = calculate_delivery_cost(1.0, 100, "обычный", is_express=False)
         express, _ = calculate_delivery_cost(1.0, 100, "обычный", is_express=True)
         self.assertEqual(express, expected_cost(1.0, 100, "обычный", True))
         self.assertGreater(express, ordinary)
 
     def test_express_cost_matches_restored_business_formula(self):
-        # Ожидание: int(700 * 1.5) = 1050
+        # 700 * 1.5 = 1050
         cost, _ = calculate_delivery_cost(1.0, 100, "обычный", is_express=True)
         self.assertEqual(cost, 1050)
 
@@ -148,11 +146,7 @@ class TestDeliveryExpressAndDate(unittest.TestCase):
         self.assertEqual(date, "2026-09-05")
 
     def test_express_delivery_keeps_at_least_one_day(self):
-        """
-        Бизнес-ожидание: даже экспресс не может дать 0 дней
-        (должен быть max(1, days//2)).
-        При distance=100: days=1, в коде 1//2=0 -> дата отправки 2026-09-03 (дефект).
-        """
+        # экспресс не должен давать 0 дней доставки
         _, date = calculate_delivery_cost(1.0, 100, "обычный", is_express=True)
         self.assertEqual(date, "2026-09-04")
 
