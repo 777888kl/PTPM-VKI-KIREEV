@@ -28,21 +28,6 @@ def expected_cost(weight: float, distance: int, package_type: str, is_express: b
     return int(total)
 
 
-def expected_cost(weight: float, distance: int, package_type: str, is_express: bool = False) -> int:
-    total = 200 + distance * 5
-    if weight > 5.0 and weight < 20.0:
-        total *= 1.2
-    elif weight >= 20.0:
-        total *= 1.5
-    if package_type == "хрупкий":
-        total += 300
-    elif package_type == "опасный":
-        total += 1000
-    if is_express:
-        total *= 1.5
-    return int(total)
-
-
 class TestDeliveryValidation(unittest.TestCase):
     """Границы веса, дистанции и типа посылки."""
 
