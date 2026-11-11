@@ -1,39 +1,97 @@
-import re
+from typing import Any, Dict, List
+from bs4 import BeautifulSoup
+import requests
 from src.database import DatabaseRepository
-from src.loader import PageLoader
 
-class ForumParser():
 
-    def __init__(self, repository: DatabaseRepository, loader: PageLoader):
-        self.repository = repository
-        self.loader = loader
+class ForumParser:
+    """Компонент сбора данных со страниц форумов."""
 
-    def parse_page(self, url: str):
+    DEFAULT_HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+    }
 
-        soup = self.loader.get_page(url)
+    def __init__(self, headers: Dict[str, str] = None, timeout: int = 10) -> None:
+        self.headers = headers or self.DEFAULT_HEADERS
+        self.timeout = timeout
 
-        items = soup.select("li.comments-feed-item")
+    def fetch_page(self, url: str) -> str:
+        """Скачивает HTML-код страницы по URL."""
+        response = requests.get(url, headers=self.headers, timeout=self.timeout)
+        response.raise_for_status()
+        return response.text
 
-        res = []
-        id = 1
+    def parse_html(self, html_content: str) -> List[Dict[str, Any]]:
+        """
+        Парсит HTML-разметку и извлекает список комментариев.
 
-        for li in items:
-            li_id = li.get("id", "")
-            comment_uuid = li_id.removeprefix("comment-")
+        Ожидаемая селекторная модель элементов форума:
+          - Контейнер поста: [data-post-id] или class='post' / class='comment'
+          - Автор: класс .post-author или .username
+          - Тело сообщения: класс .post-message или .comment-body
+        """
+        soup = BeautifulSoup(html_content, "lxml")
+        results: List[Dict[str, Any]] = []
 
-            author_tag = li.select_one("a.threads-text.author")
-            author = author_tag.get_text(strip=True) if author_tag else '-'
+        posts = soup.find_all(
+            lambda tag: tag.has_attr("data-post-id")
+            or "post" in tag.get("class", [])
+            or "comment" in tag.get("class", [])
+        )
 
-            body_div = li.find(id=re.compile(r'^existingCommentDiv'))
-            text = body_div.get_text(' ', strip=True) if body_div else '-'    
+        for post in posts:
+            raw_id = post.get("data-post-id") or post.get("id", "").replace("post-", "")
+            if not raw_id or not str(raw_id).isdigit():
+                continue
 
-            res.append((id, comment_uuid, author, text))
-            id += 1
+            comment_id = int(raw_id)
 
-        self.__save_to_db(res, self.repository)
+            author_tag = post.find(class_=["post-author", "username", "author"])
+            author_name = author_tag.get_text(strip=True) if author_tag else "Anonymous"
 
-        return res
-        
-    def __save_to_db(self, parsed_data: list, repository: DatabaseRepository):
-        for id, comment_uuid, author, text in parsed_data:
-            repository.add(id, comment_uuid, author, text)
+            content_tag = post.find(class_=["post-message", "comment-body", "message"])
+            if content_tag:
+                message_html = "".join(str(child) for child in content_tag.contents).strip()
+            else:
+                message_html = ""
+
+            results.append(
+                {
+                    "comment_id": comment_id,
+                    "name": author_name,
+                    "message": message_html,
+                }
+            )
+
+        return results
+
+    def parse_page(self, url: str) -> List[Dict[str, Any]]:
+        """Загружает страницу по URL и возвращает распарсенные данные."""
+        html = self.fetch_page(url)
+        return self.parse_html(html)
+
+    def save_to_db(
+        self, parsed_data: List[Dict[str, Any]], repository: DatabaseRepository
+    ) -> int:
+        """
+        Сохраняет распарсенные сущности в базу данных через DatabaseRepository.
+        Возвращает количество успешно вставленных записей.
+        """
+        saved_count = 0
+        for item in parsed_data:
+            try:
+                repository.add(
+                    comment_id=item["comment_id"],
+                    username=item["name"],
+                    message=item["message"],
+                )
+                saved_count += 1
+            except Exception:
+                # Пропускаем дубликаты ID или невалидные строки, продолжая обработку
+                continue
+        return saved_count

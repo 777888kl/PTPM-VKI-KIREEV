@@ -1,37 +1,59 @@
+import os
 import unittest
-from unittest.mock import MagicMock
-from pathlib import Path
-from bs4 import BeautifulSoup
-from src.parser import ForumParser
-from src.loader import PageLoader
 from src.database import DatabaseRepository
+from src.parser import ForumParser
 
 
-
-class TestParser(unittest.TestCase):
-
+class TestForumParser(unittest.TestCase):
     @classmethod
-    def setUpClass(cls):
-        fixture_path = Path(__file__).parent / 'fixtures' / 'page.html'
+    def setUpClass(cls) -> None:
+        """Чтение локального HTML-слепка перед запуском тестового набора."""
+        fixture_path = os.path.join(
+            os.path.dirname(__file__), "fixtures", "forum_mock.html"
+        )
+        with open(fixture_path, "r", encoding="utf-8") as f:
+            cls.fixture_html = f.read()
 
-        with open(fixture_path, 'r', encoding='utf-8') as f:
-            cls.mock_html = f.read()
+    def setUp(self) -> None:
+        self.parser = ForumParser()
+        self.repo = DatabaseRepository(":memory:")
 
-    def setUp(self):
-        self.page = self.mock_html
-        self.repository = DatabaseRepository(':memory:')
-        self.loader = MagicMock(spec=PageLoader)
-        self.parser = ForumParser(repository=self.repository, loader=self.loader)
+    def test_parse_html_extracts_correct_fields(self) -> None:
+        """Проверка корректности извлечения ID, имени и вложенного HTML."""
+        items = self.parser.parse_html(self.fixture_html)
 
-    def test_parse_comments(self):
-        self.loader.get_page.return_value = BeautifulSoup(self.page, 'lxml')
-        res = self.parser.parse_page('')
-        self.assertEqual(len(res), 5)
+        self.assertEqual(len(items), 2)
 
-    def test_parse_empty_page(self):
-        self.loader.get_page.return_value = BeautifulSoup('<html><body></body></html>', 'lxml')
-        res = self.parser.parse_page('')
-        self.assertEqual(res, [])
+        first_post = items[0]
+        self.assertEqual(first_post["comment_id"], 101)
+        self.assertEqual(first_post["name"], "SeniorDev")
+        self.assertIn("<b>requests</b>", first_post["message"])
 
-if __name__ == '__main__':
+        second_post = items[1]
+        self.assertEqual(second_post["comment_id"], 102)
+        self.assertEqual(second_post["name"], "JuniorLearner")
+        self.assertIn('<a href="#101">@SeniorDev</a>', second_post["message"])
+
+    def test_save_to_db_persists_extracted_entities(self) -> None:
+        """Проверка цепочки сохранения распарсенных данных в базу данных."""
+        items = self.parser.parse_html(self.fixture_html)
+        saved_count = self.parser.save_to_db(items, self.repo)
+
+        self.assertEqual(saved_count, 2)
+
+        db_item = self.repo.get_by_id(101)
+        self.assertIsNotNone(db_item)
+        self.assertEqual(db_item["name"], "SeniorDev")
+
+    def test_save_to_db_ignores_duplicates_gracefully(self) -> None:
+        """Проверка устойчивости save_to_db к повторной записи тех же данных."""
+        items = self.parser.parse_html(self.fixture_html)
+        self.parser.save_to_db(items, self.repo)
+
+        # Повторная попытка сохранить те же записи не должна ронять программу
+        second_run_saved = self.parser.save_to_db(items, self.repo)
+        self.assertEqual(second_run_saved, 0)
+
+
+if __name__ == "__main__":
     unittest.main()

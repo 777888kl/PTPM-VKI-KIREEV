@@ -5,7 +5,7 @@ from src.loader import PageLoader
 
 repository = DatabaseRepository()
 loader = PageLoader()
-parser = ForumParser(repository, loader)
+parser = ForumParser()
 
 url = DEFAULT_URL
 
